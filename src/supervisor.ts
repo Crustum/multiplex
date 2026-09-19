@@ -1,5 +1,99 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import type { CommandDef } from "./types.js";
+
+const isWindows = process.platform === "win32";
+
+/**
+ * Whether taskkill output reports success. Matches English and Russian
+ * messages (Windows display language varies by machine).
+ *
+ * Exported for tests; the graceful-then-force escalation in `killPid`
+ * depends on telling a refused ask apart from a delivered one.
+ */
+export function taskkillSucceeded(output: string): boolean {
+    const text = output.toLowerCase();
+
+    if (
+        text.includes("error") ||
+        text.includes("ошибка") ||
+        text.includes("not found") ||
+        text.includes("не найден") ||
+        text.includes("access is denied") ||
+        text.includes("доступ запрещен") ||
+        text.includes("only be terminated forcefully") ||
+        text.includes("насильственно")
+    ) {
+        return false;
+    }
+
+    return (
+        text.includes("success") ||
+        text.includes("успешно") ||
+        text === ""
+    );
+}
+
+/**
+ * Kills a spawned command and, on Unix, its whole process group.
+ *
+ * The child we spawn is a shell (`sh`/`cmd.exe`) and the thing holding the
+ * port is its descendant, so on Unix we signal the negative pid (the group).
+ * Negative pids throw on Windows, where the equivalent is `taskkill /T`
+ * (whole tree): without `/F` for a graceful ask, with `/F` for a force kill.
+ *
+ * A graceful ask fails outright on console processes that can only be
+ * terminated forcefully. In that case escalate to a force tree-kill
+ * immediately: falling back to a direct `process.kill` would take down only
+ * the shell wrapper and orphan the grandchildren holding the ports.
+ */
+function killPid(pid: number, signal: NodeJS.Signals): void {
+    if (!isWindows) {
+        process.kill(-pid, signal);
+
+        return;
+    }
+
+    const force = signal === "SIGKILL";
+
+    const runTaskkill = (withForce: boolean): boolean => {
+        const args = withForce
+            ? ["/PID", String(pid), "/T", "/F"]
+            : ["/PID", String(pid), "/T"];
+
+        try {
+            const result = spawnSync("taskkill", args, {
+                encoding: "utf8",
+                windowsHide: true,
+            });
+
+            if (result.status !== 0) {
+                return false;
+            }
+
+            return taskkillSucceeded(
+                `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+            );
+        } catch {
+            return false;
+        }
+    };
+
+    if (runTaskkill(force)) {
+        return;
+    }
+
+    if (!force) {
+        // The graceful ask was refused (console processes that only die
+        // forcefully) — escalate to a force tree-kill rather than killing
+        // just the wrapper and orphaning the tree below it.
+        runTaskkill(true);
+
+        return;
+    }
+
+    // Last resort when taskkill itself is unavailable.
+    process.kill(pid, signal);
+}
 
 export const MAX_AUTO_RESTARTS = 5;
 
@@ -203,12 +297,32 @@ export function createSupervisor({
             env.FORCE_COLOR = "1";
         }
 
-        const proc = spawn("sh", ["-c", cmd.command], {
-            cwd,
-            detached: true,
-            env,
-            stdio: ["ignore", "pipe", "pipe"],
-        });
+        // `sh` does not exist on Windows; `cmd.exe /d /s /c` is its equivalent.
+        // `windowsHide` stops each taskkill flashing a console window on
+        // Windows; harmless on Unix.
+        //
+        // Windows spawns attached (`detached: false`) so children share our
+        // console: a detached child gets its own console window outside the
+        // terminal multiplex runs in, and — worse — never receives that
+        // terminal's Ctrl+C, so stopping multiplex leaves every dev server
+        // running and holding its port. Attached children die with the
+        // console like on Unix; multiplex-driven kills still go through
+        // `taskkill /T` (see `killPid`), which needs no detached group.
+        const proc = isWindows
+            ? spawn("cmd.exe", ["/d", "/s", "/c", cmd.command], {
+                  cwd,
+                  detached: false,
+                  env,
+                  stdio: ["ignore", "pipe", "pipe"],
+                  windowsHide: true,
+              })
+            : spawn("sh", ["-c", cmd.command], {
+                  cwd,
+                  detached: true,
+                  env,
+                  stdio: ["ignore", "pipe", "pipe"],
+                  windowsHide: true,
+              });
 
         const spawnTime = new Date();
 
@@ -443,7 +557,7 @@ export function createSupervisor({
                 proc.signalCode === null
             ) {
                 try {
-                    process.kill(-proc.pid, "SIGKILL");
+                    killPid(proc.pid, "SIGKILL");
 
                     intentionalKills.set(
                         index,
@@ -464,11 +578,14 @@ export function createSupervisor({
     }
 
     /**
-     * Signals the whole process group rather than the child we spawned, because
-     * the child is `sh` and the thing holding the port is its descendant. The
-     * group outlives its leader while any member is still in it, so this is not
-     * guarded on the leader being alive: a command that backgrounded something
-     * has an exited `sh` and a group that still needs the signal.
+     * Signals the whole process tree rather than the child we spawned, because
+     * the child is a shell and the thing holding the port is its descendant. The
+     * group/tree outlives its leader while any member is still in it, so this is
+     * not guarded on the leader being alive: a command that backgrounded
+     * something has an exited shell and a tree that still needs the signal.
+     * On Windows this goes through `taskkill /T` (see `killPid`); note the
+     * graceful SIGTERM there is emulated as termination, so child cleanup
+     * handlers may not run the way they do on Unix.
      */
     function signalAll(signal: NodeJS.Signals, claimExits: boolean) {
         procs.forEach((proc, index) => {
@@ -479,7 +596,7 @@ export function createSupervisor({
             const live = proc.exitCode === null && proc.signalCode === null;
 
             try {
-                process.kill(-proc.pid, signal);
+                killPid(proc.pid, signal);
 
                 if (claimExits && live) {
                     intentionalKills.set(

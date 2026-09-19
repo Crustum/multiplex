@@ -9,6 +9,7 @@ import {
     type FailureReason,
     type OutputStream,
     type Supervisor,
+    taskkillSucceeded,
 } from "./supervisor.js";
 import type { CommandDef } from "./types.js";
 
@@ -89,6 +90,60 @@ const cmd = (label: string, command: string): CommandDef => ({
     label,
     color: "#93c5fd",
     command,
+});
+
+describe("taskkillSucceeded", () => {
+    it("accepts English and Russian success output, and empty output", () => {
+        assert.equal(
+            taskkillSucceeded(
+                "SUCCESS: The process with PID 1234 has been terminated.",
+            ),
+            true,
+        );
+        assert.equal(
+            taskkillSucceeded(
+                "Успешно: процесс с PID 1234 был завершен.",
+            ),
+            true,
+        );
+        assert.equal(taskkillSucceeded(""), true);
+    });
+
+    it("rejects refusals and errors in either language", () => {
+        assert.equal(
+            taskkillSucceeded(
+                "ERROR: The process with PID 1234 could not be terminated.",
+            ),
+            false,
+        );
+        assert.equal(
+            taskkillSucceeded(
+                "ОШИБКА: Не удается завершить процесс с PID 1234.",
+            ),
+            false,
+        );
+        // Console processes that only die forcefully: the graceful ask
+        // failed, so killPid must escalate instead of killing just the
+        // wrapper and orphaning the tree below it.
+        assert.equal(
+            taskkillSucceeded(
+                "ERROR: The process with PID 1234 can only be terminated forcefully.",
+            ),
+            false,
+        );
+        assert.equal(
+            taskkillSucceeded(
+                "ОШИБКА: Процесс может быть прерван только насильственно.",
+            ),
+            false,
+        );
+        assert.equal(
+            taskkillSucceeded(
+                "ERROR: The process 1234 not found.",
+            ),
+            false,
+        );
+    });
 });
 
 describe("createSupervisor", () => {

@@ -20,7 +20,14 @@ import {
 export { DEFAULT_COLORS } from "./color.js";
 export type { CommandInput, MultiplexOptions } from "./types.js";
 
-const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
+// SIGHUP/SIGQUIT do not exist on Windows; SIGBREAK (Ctrl+Break) does.
+// SIGTERM can be listened for on Windows but the OS never sends it, while
+// SIGHUP is generated when the console window is closed — so both stay out
+// of the graceful-termination path there in favour of SIGBREAK.
+const SIGNALS =
+    process.platform === "win32"
+        ? (["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"] as const)
+        : (["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const);
 
 function positiveInt(value: number, name: string): number {
     if (!Number.isSafeInteger(value) || value <= 0) {
@@ -44,9 +51,10 @@ function supportsColor(): boolean {
 
 /**
  * Installs the teardown that has to survive a signal. `process.on("exit")` does
- * not run when we are killed by one, and the children sit in their own process
- * groups so they never see the terminal's own SIGHUP — without these, closing
- * the window leaves every dev server running and holding its port.
+ * not run when we are killed by one, and on Unix the children sit in their own
+ * process groups so they never see the terminal's own SIGHUP — without these,
+ * closing the window leaves every dev server running and holding its port.
+ * (On Windows children share our console, so they see Ctrl+C directly.)
  */
 function installTeardown(shutdown: () => Promise<void>, onExit: () => void) {
     const handlers = SIGNALS.map((signal) => {
@@ -56,7 +64,7 @@ function installTeardown(shutdown: () => Promise<void>, onExit: () => void) {
         // waiting. Someone who wants out now presses it again.
         const handler = () => {
             shutdown().finally(() => {
-                process.exit(128 + constants.signals[signal]);
+                process.exit(128 + (constants.signals[signal] ?? 0));
             });
         };
 
