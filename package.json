@@ -1,6 +1,6 @@
 {
-    "name": "@laravel/multiplex",
-    "version": "0.4.3",
+    "name": "@crustum/multiplex",
+    "version": "0.4.4",
     "description": "A tabbed TUI for running multiple commands simultaneously with searchable, scrollable output",
     "keywords": [
         "tui",
@@ -9,15 +9,16 @@
         "multiplexer",
         "process-manager",
         "ink",
-        "laravel"
+		"windows",
+        "cakephp"
     ],
-    "homepage": "https://github.com/laravel/multiplex#readme",
+    "homepage": "https://github.com/Crustum/multiplex#readme",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/laravel/multiplex.git"
+        "url": "git+https://github.com/Crustum/multiplex.git"
     },
     "bugs": {
-        "url": "https://github.com/laravel/multiplex/issues"
+        "url": "https://github.com/Crustum/multiplex/issues"
     },
     "license": "MIT",
     "author": {
@@ -72,6 +73,7 @@
     },
     "os": [
         "darwin",
-        "linux"
+        "linux",
+        "win32"
     ]
 }
