@@ -1,4 +1,4 @@
-# @laravel/multiplex
+# @crustum/multiplex
 
 A tabbed TUI for running multiple commands simultaneously with searchable, scrollable output. Built with [Ink](https://github.com/vadimdemedes/ink).
 
@@ -9,18 +9,19 @@ Without an interactive terminal — piped, redirected, or in CI — it runs [inl
 ## Install
 
 ```bash
-npm install -g @laravel/multiplex
+npm install -g @crustum/multiplex
 ```
 
 Or run directly:
 
 ```bash
-npx @laravel/multiplex 'server,php artisan serve' 'queue,php artisan queue:listen'
+npx @crustum/multiplex 'server,php artisan serve' 'queue,php artisan queue:listen'
 ```
 
 ## Requirements
 
 - **Node 22.13 or later.**
+- **OS: macOS, Linux, or Windows.** Windows (`win32`) is supported since `0.4.4`.
 - **An interactive terminal, for the TUI.** Both stdin and stdout must be a TTY, and the window has to be at least 26 columns by 8 rows. Without either, multiplex runs in [inline mode](#inline-mode) instead of failing.
 - **Non-interactive commands.** Child processes are spawned without stdin, so anything that prompts for input — `php artisan tinker`, a migration confirmation — won't work.
 - **A stable terminal width.** Children are told how wide they are via `COLUMNS` when they start, and that can't be updated afterwards. Resizing the terminal leaves already-running commands sizing their output to the old width; press `r` to restart one against the new width.
@@ -135,12 +136,12 @@ multiplex --json 'build,pnpm run build' 'test,pnpm test' | jq -c 'select(.type =
 The package also exports `multiplex()`, so you can start the TUI from your own script instead of going through the CLI:
 
 ```ts
-import { multiplex } from "@laravel/multiplex";
+import { multiplex } from "@crustum/multiplex";
 
 const code = await multiplex({
     commands: [
-        { label: "server", command: "php artisan serve" },
-        { label: "queue", color: "#fb7185", command: "php artisan queue:listen" },
+        { label: "server", command: "php bin/cake.php server" },
+        { label: "queue", color: "#fb7185", command: "php bin/cake.php queue worker" },
         { label: "vite", color: "cyan", command: "pnpm run dev" },
     ],
     stream: true,
@@ -149,11 +150,11 @@ const code = await multiplex({
 process.exit(code);
 ```
 
-Every `command` is run through `sh -c`, so it is a shell string, not an argv array — pipes, redirects and `&&` all work. That also means **you must never build a `command` out of untrusted input.** Anything that reaches the string is executed with the privileges of the calling process, so a value taken from a config file, a request payload or a workspace manifest is a remote code execution vector. If the commands are not written by you, quote every interpolated value yourself before passing it in.
+Every `command` is run through a shell string, not an argv array — `sh -c` on macOS/Linux, `cmd.exe /d /s /c` on Windows — so pipes, redirects and `&&` all work. That also means **you must never build a `command` out of untrusted input.** Anything that reaches the string is executed with the privileges of the calling process, so a value taken from a config file, a request payload or a workspace manifest is a remote code execution vector. If the commands are not written by you, quote every interpolated value yourself before passing it in.
 
-`multiplex()` takes over the terminal for the duration of the call: it enters the alternate screen, installs its own `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` handlers, and renders the TUI. It resolves with the same exit code the CLI would have used — `0` normally, `1` if rendering failed. By then the terminal is restored, every child process is dead, the buffered output has been flushed to scrollback, and the signal handlers it installed have been removed, so the calling process is free to carry on.
+`multiplex()` takes over the terminal for the duration of the call: it enters the alternate screen, installs its own signal handlers (`SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT`, or `SIGINT`/`SIGTERM`/`SIGBREAK`/`SIGHUP` on Windows), and renders the TUI. It resolves with the same exit code the CLI would have used — `0` normally, `1` if rendering failed. By then the terminal is restored, every child process is dead, the buffered output has been flushed to scrollback, and the signal handlers it installed have been removed, so the calling process is free to carry on.
 
-Shutting down sends each command's process group a `SIGTERM` and waits for it, so anything that tidies up on the way out — a dev server unlinking the hot file it wrote, a watcher releasing a lock — gets to. Whatever is still running two seconds later is killed outright, and pressing `Ctrl-C` a second time skips the wait entirely.
+Shutting down sends each command's process group a `SIGTERM` and waits for it, so anything that tidies up on the way out — a dev server unlinking the hot file it wrote, a watcher releasing a lock — gets to. Whatever is still running two seconds later is killed outright, and pressing `Ctrl-C` a second time skips the wait entirely. On Windows the same shutdown goes through `taskkill /T` (whole process tree, `/F` for the force-kill stage), so the graceful ask is emulated termination — child `SIGTERM` cleanup handlers may not run the way they do on Unix (see [Windows](#windows)).
 
 If stdin or stdout isn't a TTY, or the terminal is smaller than 26 columns by 8 rows, it runs [inline](#inline-mode) instead, resolving with the first failing command's exit code. Set `inline: true` to ask for that in a real terminal.
 
@@ -183,6 +184,16 @@ Processes that crash (exit with a non-zero code) are automatically restarted aft
 A desktop notification is sent when a process permanently fails (macOS via `osascript`, Linux via `notify-send` if available).
 
 Use `--no-restart` to turn it off entirely, for one-shot commands like builds or migrations.
+
+## Windows
+
+Supported since `0.4.4` (`"os"` includes `win32`). Behavior is the same as on Unix except for the platform differences below.
+
+- **Shell syntax is `cmd.exe`, not `sh`.** Each command runs as `cmd.exe /d /s /c <command>`, so shell features follow `cmd.exe` rules (`&&`, `||`, `%VAR%`, `^` escaping) rather than POSIX ones. POSIX-style quoting, `$VAR`, `$(...)` and `&&`-chains written for `sh` may not work — write the command the way you would type it into `cmd.exe`, or call `sh`/`bash` explicitly if one is installed.
+- **Termination is `taskkill /T`, not a signal to a process group.** Unix signals the negative pid (the whole group); negative pids throw on Windows, so kills go through `taskkill /PID <pid> /T` for the graceful ask and `taskkill /PID <pid> /T /F` for the force kill. The graceful ask is emulated termination: child `SIGTERM` cleanup handlers may not run, and console processes that refuse a graceful ask are escalated to a force tree-kill immediately (falling back to killing just the shell wrapper would orphan the grandchildren holding the ports).
+- **Children share the console.** Spawns are attached (`detached: false`) with `windowsHide: true`: a detached child gets its own console window outside the terminal multiplex runs in — and never receives that terminal's `Ctrl+C`, so quitting would leave every dev server running and holding its port. Multiplex-driven kills still go through `taskkill /T`, which needs no detached group.
+- **Signals are `SIGINT`/`SIGTERM`/`SIGBREAK`/`SIGHUP`.** `SIGHUP`/`SIGQUIT` do not exist on Windows; `SIGBREAK` (`Ctrl+Break`) takes `SIGQUIT`'s place. `SIGTERM` can be listened for but the OS never sends it, and `SIGHUP` is generated when the console window is closed. Exit codes after a signal still follow the `128 + signal-number` convention.
+- **Desktop notifications are not supported on Windows.** Failure notices go to macOS via `osascript` and Linux via `notify-send`; on Windows there is no notifier, so a permanent failure is only shown in the TUI/sidebar and the exit flush.
 
 ## Keyboard Shortcuts
 
@@ -235,5 +246,6 @@ Use `--no-restart` to turn it off entirely, for one-shot commands like builds or
 - **New output indicator** when scrolled up and new data arrives
 - **Buffer limits** to keep memory usage low during long sessions
 - **Output flush** on exit so logs are preserved in terminal scrollback
-- **Process group cleanup** on quit and on `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT`, so closing the terminal window doesn't leave dev servers running and holding their ports
-- **Graceful shutdown** - commands get a `SIGTERM` and up to two seconds to clean up after themselves before they are killed, so a dev server removes the files it wrote
+- **Process group cleanup** on quit and on `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` (`SIGINT`/`SIGTERM`/`SIGBREAK`/`SIGHUP` on Windows, via `taskkill /T`), so closing the terminal window doesn't leave dev servers running and holding their ports
+- **Graceful shutdown** - commands get a `SIGTERM` and up to two seconds to clean up after themselves before they are killed, so a dev server removes the files it wrote (on Windows the graceful ask is emulated `taskkill /T` termination — see [Windows](#windows))
+- **Windows support** - commands run via `cmd.exe /d /s /c`, attached to the shared console with `windowsHide`, terminated as a whole tree with `taskkill /T` (`/F` for force)
