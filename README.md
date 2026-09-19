@@ -15,7 +15,7 @@ npm install -g @crustum/multiplex
 Or run directly:
 
 ```bash
-npx @crustum/multiplex 'server,php artisan serve' 'queue,php artisan queue:listen'
+npx @crustum/multiplex 'server,php bin/cake.php server' 'queue,php bin/cake.php queue worker'
 ```
 
 ## Requirements
@@ -23,7 +23,7 @@ npx @crustum/multiplex 'server,php artisan serve' 'queue,php artisan queue:liste
 - **Node 22.13 or later.**
 - **OS: macOS, Linux, or Windows.** Windows (`win32`) is supported since `0.4.4`.
 - **An interactive terminal, for the TUI.** Both stdin and stdout must be a TTY, and the window has to be at least 26 columns by 8 rows. Without either, multiplex runs in [inline mode](#inline-mode) instead of failing.
-- **Non-interactive commands.** Child processes are spawned without stdin, so anything that prompts for input — `php artisan tinker`, a migration confirmation — won't work.
+- **Non-interactive commands.** Child processes are spawned without stdin, so anything that prompts for input — `php bin/cake.php console`, a migration confirmation — won't work.
 - **A stable terminal width.** Children are told how wide they are via `COLUMNS` when they start, and that can't be updated afterwards. Resizing the terminal leaves already-running commands sizing their output to the old width; press `r` to restart one against the new width.
 
 ## Usage
@@ -49,22 +49,22 @@ The label itself can hold anything but the last `@` — `queue:work` and `@scope
 
 ```bash
 # Basic usage
-multiplex 'server,php artisan serve' 'queue,php artisan queue:listen' 'vite,pnpm run dev'
+multiplex 'server,php bin/cake.php server' 'queue,php bin/cake.php queue worker' 'vite,pnpm run dev'
 
 # With custom colors
-multiplex 'server@#93c5fd,php artisan serve' 'queue@#fb7185,php artisan queue:listen'
+multiplex 'server@#93c5fd,php bin/cake.php server' 'queue@#fb7185,php bin/cake.php queue worker'
 
 # Or with color names
-multiplex 'server@blue,php artisan serve' 'queue@magentaBright,php artisan queue:listen'
+multiplex 'server@blue,php bin/cake.php server' 'queue@magentaBright,php bin/cake.php queue worker'
 
 # Set the terminal tab title
-multiplex --title "Admin" 'server,php artisan serve' 'queue,php artisan queue:listen'
+multiplex --title "Admin" 'server,php bin/cake.php server' 'queue,php bin/cake.php queue worker'
 
 # Start in stream mode with timestamps
-multiplex -s --timestamps 'server,php artisan serve' 'queue,php artisan queue:listen'
+multiplex -s --timestamps 'server,php bin/cake.php server' 'queue,php bin/cake.php queue worker'
 
 # Custom working directory
-multiplex --cwd /path/to/project 'server,php artisan serve'
+multiplex --cwd /path/to/project 'server,php bin/cake.php server'
 
 # Disable auto-restart
 multiplex --no-restart 'build,pnpm run build'
